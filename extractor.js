@@ -5,13 +5,13 @@
 
 // PDF.js operator numbers (stable across v3.x)
 const PDF_OPS = {
-  moveTo: 13,
-  lineTo: 14,
-  curveTo: 15,
-  curveTo2: 16,
-  curveTo3: 17,
-  closePath: 18,
-  rectangle: 19,
+  moveTo: 10,
+  lineTo: 11,
+  curveTo: 12,
+  curveTo2: 12,
+  curveTo3: 12,
+  closePath: 9,
+  rectangle: 91,
   stroke: 20,
   closeStroke: 21,
   fill: 22,
@@ -26,8 +26,8 @@ const PDF_OPS = {
   setLineWidth: 37,
   setStrokeRGBColor: 66,
   setFillRGBColor: 80,
-  beginText: 93,
-  endText: 94,
+  beginText: 83,
+  endText: 84,
 };
 
 // ─────────────────────────────────────────────
