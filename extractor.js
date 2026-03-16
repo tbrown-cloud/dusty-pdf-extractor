@@ -1,8 +1,34 @@
 /**
- * Dusty Robotics — PDF → DXF Extractor Engine
- * Extracts vector geometry from PDF operator streams and writes DXF output.
- * Internal PoC — not for external distribution.
+ * Dusty Robotics — PDF → DXF Extractor Engine v2
+ * Uses raw operator numbers for PDF.js 3.x compatibility.
  */
+
+// PDF.js operator numbers (stable across v3.x)
+const PDF_OPS = {
+  moveTo: 13,
+  lineTo: 14,
+  curveTo: 15,
+  curveTo2: 16,
+  curveTo3: 17,
+  closePath: 18,
+  rectangle: 19,
+  stroke: 20,
+  closeStroke: 21,
+  fill: 22,
+  eoFill: 23,
+  fillStroke: 24,
+  eoFillStroke: 25,
+  closeFillStroke: 26,
+  closeEOFillStroke: 27,
+  endPath: 28,
+  save: 29,
+  restore: 30,
+  setLineWidth: 37,
+  setStrokeRGBColor: 66,
+  setFillRGBColor: 80,
+  beginText: 93,
+  endText: 94,
+};
 
 // ─────────────────────────────────────────────
 //  GEOMETRY EXTRACTION
@@ -10,7 +36,7 @@
 
 function extractGeometry(ops, viewport, options) {
   const {
-    scaleFactor = 96,   // PDF units → real world (96 = 1/8"=1')
+    scaleFactor = 96,
     units = 'imperial',
     rotation = 0,
     originX = 0,
@@ -21,218 +47,184 @@ function extractGeometry(ops, viewport, options) {
 
   const pageHeight = viewport.height;
 
-  // unit conversion: PDF points → real world units
-  // PDF is 72 pts/inch. Scale factor is the ratio of drawing units per inch.
-  // e.g. 1/8"=1' means 1 inch on paper = 8 feet = 96 inches real.
   const ptToUnit = (pt) => {
     const inches = pt / 72;
     if (units === 'imperial') {
-      return inches * (scaleFactor / 12); // result in feet
+      return inches * (scaleFactor / 12);
     } else {
-      return inches * (scaleFactor / 12) * 304.8; // result in mm
+      return inches * (scaleFactor / 12) * 304.8;
     }
   };
 
-  // flip Y axis (PDF origin is bottom-left, Y goes up, but PDF.js gives top-left)
   const transformX = (x) => ptToUnit(x) + originX;
-  const transformY = (y) => ptToUnit(pageHeight - y) + originY; // flip
+  const transformY = (y) => ptToUnit(pageHeight - y) + originY;
 
   const { fnArray, argsArray } = ops;
 
   const lines = [];
-  const arcs = [];
   const polylines = [];
   const rectangles = [];
   const texts = [];
 
-  let cx = 0, cy = 0;         // current point
-  let pathStart = { x: 0, y: 0 };
+  let cx = 0, cy = 0;
   let currentPath = [];
   let isDrawing = false;
+  let inText = false;
 
-  // current graphics state
-  const gState = { lineWidth: 0.5, r: 0, g: 0, b: 0 };
-  const gStack = [];
-
-  const OPS = pdfjsLib.OPS;
+  const opsSeen = {};
 
   for (let i = 0; i < fnArray.length; i++) {
     const fn = fnArray[i];
     const args = argsArray[i];
 
-    switch (fn) {
-      // graphics state
-      case OPS.save:
-        gStack.push({ ...gState });
-        break;
-      case OPS.restore:
-        if (gStack.length) Object.assign(gState, gStack.pop());
-        break;
-      case OPS.setLineWidth:
-        gState.lineWidth = args[0];
-        break;
-      case OPS.setStrokeRGBColor:
-        gState.r = args[0]; gState.g = args[1]; gState.b = args[2];
-        break;
-      case OPS.setFillRGBColor:
-        break; // ignore fills
+    opsSeen[fn] = (opsSeen[fn] || 0) + 1;
 
-      // path construction
-      case OPS.moveTo: {
-        const [x, y] = args;
-        cx = x; cy = y;
-        pathStart = { x: cx, y: cy };
+    if (fn === PDF_OPS.beginText) { inText = true; continue; }
+    if (fn === PDF_OPS.endText) { inText = false; continue; }
+    if (inText) continue;
+
+    switch (fn) {
+
+      case PDF_OPS.moveTo: {
+        if (!args || args.length < 2) break;
+        cx = args[0]; cy = args[1];
         currentPath = [{ x: transformX(cx), y: transformY(cy) }];
         isDrawing = true;
         break;
       }
 
-      case OPS.lineTo: {
-        const [x, y] = args;
-        if (isDrawing) {
-          const x1 = transformX(cx), y1 = transformY(cy);
-          const x2 = transformX(x), y2 = transformY(y);
-          lines.push({ x1, y1, x2, y2, lw: gState.lineWidth });
-          currentPath.push({ x: x2, y: y2 });
-        }
-        cx = x; cy = y;
+      case PDF_OPS.lineTo: {
+        if (!args || args.length < 2 || !isDrawing) break;
+        const px = transformX(args[0]);
+        const py = transformY(args[1]);
+        const prev = currentPath[currentPath.length - 1] || { x: transformX(cx), y: transformY(cy) };
+        lines.push({ x1: prev.x, y1: prev.y, x2: px, y2: py });
+        currentPath.push({ x: px, y: py });
+        cx = args[0]; cy = args[1];
         break;
       }
 
-      case OPS.curveTo: {
-        // cubic bezier — approximate as line segment between endpoints
-        // for construction drawings, most curves are door swings/arcs
-        const [x1, y1, x2, y2, x3, y3] = args;
-        if (isDrawing) {
-          const sx = transformX(cx), sy = transformY(cy);
-          const ex = transformX(x3), ey = transformY(y3);
-          // approximate arc: add midpoint for smoother representation
-          const mx = transformX((cx + x3) / 2), my = transformY((cy + y3) / 2);
-          lines.push({ x1: sx, y1: sy, x2: mx, y2: my, lw: gState.lineWidth });
-          lines.push({ x1: mx, y1: my, x2: ex, y2: ey, lw: gState.lineWidth });
+      case PDF_OPS.curveTo: {
+        if (!args || args.length < 6 || !isDrawing) break;
+        const bx0 = cx, by0 = cy;
+        const bx1 = args[0], by1 = args[1];
+        const bx2 = args[2], by2 = args[3];
+        const bx3 = args[4], by3 = args[5];
+        let prevPt = currentPath[currentPath.length - 1] || { x: transformX(bx0), y: transformY(by0) };
+        for (let t = 0.25; t <= 1.0; t += 0.25) {
+          const mt = 1 - t;
+          const nx = mt*mt*mt*bx0 + 3*mt*mt*t*bx1 + 3*mt*t*t*bx2 + t*t*t*bx3;
+          const ny = mt*mt*mt*by0 + 3*mt*mt*t*by1 + 3*mt*t*t*by2 + t*t*t*by3;
+          const np = { x: transformX(nx), y: transformY(ny) };
+          lines.push({ x1: prevPt.x, y1: prevPt.y, x2: np.x, y2: np.y });
+          currentPath.push(np);
+          prevPt = np;
         }
-        cx = x3; cy = y3;
+        cx = bx3; cy = by3;
         break;
       }
 
-      case OPS.curveTo2: {
-        const [x2, y2, x3, y3] = args;
-        if (isDrawing) {
-          lines.push({
-            x1: transformX(cx), y1: transformY(cy),
-            x2: transformX(x3), y2: transformY(y3),
-            lw: gState.lineWidth
-          });
-        }
-        cx = x3; cy = y3;
+      case PDF_OPS.curveTo2: {
+        if (!args || args.length < 4 || !isDrawing) break;
+        const prev = currentPath[currentPath.length - 1] || { x: transformX(cx), y: transformY(cy) };
+        const ep = { x: transformX(args[2]), y: transformY(args[3]) };
+        lines.push({ x1: prev.x, y1: prev.y, x2: ep.x, y2: ep.y });
+        currentPath.push(ep);
+        cx = args[2]; cy = args[3];
         break;
       }
 
-      case OPS.curveTo3: {
-        const [x1c, y1c, x3c, y3c] = args;
-        if (isDrawing) {
-          lines.push({
-            x1: transformX(cx), y1: transformY(cy),
-            x2: transformX(x3c), y2: transformY(y3c),
-            lw: gState.lineWidth
-          });
-        }
-        cx = x3c; cy = y3c;
+      case PDF_OPS.curveTo3: {
+        if (!args || args.length < 4 || !isDrawing) break;
+        const prev2 = currentPath[currentPath.length - 1] || { x: transformX(cx), y: transformY(cy) };
+        const ep2 = { x: transformX(args[2]), y: transformY(args[3]) };
+        lines.push({ x1: prev2.x, y1: prev2.y, x2: ep2.x, y2: ep2.y });
+        currentPath.push(ep2);
+        cx = args[2]; cy = args[3];
         break;
       }
 
-      case OPS.rectangle: {
-        const [rx, ry, rw, rh] = args;
-        const bx = transformX(rx), by = transformY(ry);
-        const ex = transformX(rx + rw), ey = transformY(ry + rh);
-        rectangles.push({ x: Math.min(bx, ex), y: Math.min(by, ey), w: Math.abs(ex - bx), h: Math.abs(ey - by) });
+      case PDF_OPS.rectangle: {
+        if (!args || args.length < 4) break;
+        const rx = args[0], ry = args[1], rw = args[2], rh = args[3];
+        const x1 = transformX(rx), y1 = transformY(ry);
+        const x2 = transformX(rx + rw), y2 = transformY(ry + rh);
+        rectangles.push({ x1, y1, x2, y2 });
+        lines.push({ x1, y1, x2, y2: y1 });
+        lines.push({ x1: x2, y1, x2, y2 });
+        lines.push({ x1: x2, y1: y2, x2: x1, y2 });
+        lines.push({ x1, y1: y2, x2: x1, y2: y1 });
         isDrawing = false;
+        currentPath = [];
         break;
       }
 
-      case OPS.closePath: {
+      case PDF_OPS.closePath: {
         if (isDrawing && currentPath.length > 1) {
           const last = currentPath[currentPath.length - 1];
           const first = currentPath[0];
-          if (Math.abs(last.x - first.x) > 0.001 || Math.abs(last.y - first.y) > 0.001) {
-            lines.push({ x1: last.x, y1: last.y, x2: first.x, y2: first.y, lw: gState.lineWidth });
+          if (Math.abs(last.x - first.x) > 0.0001 || Math.abs(last.y - first.y) > 0.0001) {
+            lines.push({ x1: last.x, y1: last.y, x2: first.x, y2: first.y });
           }
         }
-        if (currentPath.length > 2) {
-          polylines.push([...currentPath]);
-        }
+        if (currentPath.length > 2) polylines.push([...currentPath]);
         currentPath = [];
         isDrawing = false;
         break;
       }
 
-      case OPS.endPath:
+      case PDF_OPS.endPath:
+      case PDF_OPS.stroke:
+      case PDF_OPS.closeStroke:
+      case PDF_OPS.fill:
+      case PDF_OPS.eoFill:
+      case PDF_OPS.fillStroke:
+      case PDF_OPS.eoFillStroke:
+      case PDF_OPS.closeFillStroke:
+      case PDF_OPS.closeEOFillStroke: {
         if (currentPath.length > 2) polylines.push([...currentPath]);
         currentPath = [];
         isDrawing = false;
         break;
-
-      case OPS.stroke:
-      case OPS.fill:
-      case OPS.eoFill:
-      case OPS.fillStroke:
-      case OPS.eoFillStroke:
-        if (currentPath.length > 2) polylines.push([...currentPath]);
-        currentPath = [];
-        isDrawing = false;
-        break;
+      }
     }
   }
 
-  // extract text entities
+  console.log('[Dusty Extractor] Unique operators seen:', Object.keys(opsSeen).sort((a,b)=>a-b).map(k => `${k}:${opsSeen[k]}`).join(', '));
+  console.log('[Dusty Extractor] Lines:', lines.length, '| Rects:', rectangles.length, '| Polylines:', polylines.length);
+
   if (includeText && textContent) {
     for (const item of textContent.items) {
       if (!item.str || !item.str.trim()) continue;
-      const tx = transformX(item.transform[4]);
-      const ty = transformY(item.transform[5]);
-      const fontSize = Math.sqrt(
-        item.transform[0] * item.transform[0] +
-        item.transform[1] * item.transform[1]
-      );
+      const fontSize = Math.abs(item.transform[0]) || Math.abs(item.transform[3]) || 10;
       texts.push({
-        x: tx,
-        y: ty,
+        x: transformX(item.transform[4]),
+        y: transformY(item.transform[5]),
         text: item.str.trim(),
-        height: ptToUnit(fontSize) * 0.8
+        height: ptToUnit(fontSize) * 0.7
       });
     }
   }
 
-  // apply rotation if needed
   if (rotation !== 0) {
     const rad = (rotation * Math.PI) / 180;
     const cos = Math.cos(rad), sin = Math.sin(rad);
-    const rotate = (x, y) => ({
-      x: x * cos - y * sin,
-      y: x * sin + y * cos
-    });
-
+    const rotate = (x, y) => ({ x: x * cos - y * sin, y: x * sin + y * cos });
     lines.forEach(l => {
-      const p1 = rotate(l.x1, l.y1);
-      const p2 = rotate(l.x2, l.y2);
-      l.x1 = p1.x; l.y1 = p1.y;
-      l.x2 = p2.x; l.y2 = p2.y;
+      const p1 = rotate(l.x1, l.y1); const p2 = rotate(l.x2, l.y2);
+      l.x1 = p1.x; l.y1 = p1.y; l.x2 = p2.x; l.y2 = p2.y;
     });
-
-    texts.forEach(t => {
-      const p = rotate(t.x, t.y);
-      t.x = p.x; t.y = p.y;
-    });
+    texts.forEach(t => { const p = rotate(t.x, t.y); t.x = p.x; t.y = p.y; });
   }
 
   return {
     lines: lines.length,
-    arcs: arcs.length,
+    arcs: 0,
     polylines: polylines.length,
     rectangles: rectangles.length,
     texts: texts.length,
     _lines: lines,
-    _arcs: arcs,
+    _arcs: [],
     _polylines: polylines,
     _rectangles: rectangles,
     _texts: texts
@@ -259,154 +251,72 @@ function buildDXF(result, options) {
 
   const now = new Date();
   const dateStr = now.toISOString().split('T')[0];
-  const unitCode = units === 'metric' ? '4' : '1'; // 1=inches, 4=mm in DXF
+  const unitCode = units === 'metric' ? '4' : '1';
 
-  const lines = [];
+  const out = [];
 
-  // ── HEADER ──
-  lines.push('0', 'SECTION');
-  lines.push('2', 'HEADER');
-  lines.push('9', '$ACADVER');
-  lines.push('1', 'AC1015'); // AutoCAD 2000
-  lines.push('9', '$INSUNITS');
-  lines.push('70', unitCode);
-  lines.push('9', '$MEASUREMENT');
-  lines.push('70', units === 'metric' ? '1' : '0');
-  lines.push('9', '$EXTMIN');
-  lines.push('10', '0.0');
-  lines.push('20', '0.0');
-  lines.push('30', '0.0');
-  lines.push('9', '$EXTMAX');
-  lines.push('10', '10000.0');
-  lines.push('20', '10000.0');
-  lines.push('30', '0.0');
-  lines.push('0', 'ENDSEC');
+  out.push('0\nSECTION');
+  out.push('2\nHEADER');
+  out.push('9\n$ACADVER\n1\nAC1015');
+  out.push('9\n$INSUNITS\n70\n' + unitCode);
+  out.push('9\n$MEASUREMENT\n70\n' + (units === 'metric' ? '1' : '0'));
+  out.push('0\nENDSEC');
 
-  // ── TABLES ──
-  lines.push('0', 'SECTION');
-  lines.push('2', 'TABLES');
+  out.push('0\nSECTION');
+  out.push('2\nTABLES');
+  out.push('0\nTABLE\n2\nLAYER\n70\n3');
+  out.push('0\nLAYER\n2\nDUSTY-GEOMETRY\n70\n0\n62\n7\n6\nContinuous');
+  out.push('0\nLAYER\n2\nDUSTY-TEXT\n70\n0\n62\n3\n6\nContinuous');
+  out.push('0\nLAYER\n2\nDUSTY-INFO\n70\n0\n62\n1\n6\nContinuous');
+  out.push('0\nENDTAB');
+  out.push('0\nENDSEC');
 
-  // LAYER table
-  lines.push('0', 'TABLE');
-  lines.push('2', 'LAYER');
-  lines.push('70', '4');
+  out.push('0\nSECTION');
+  out.push('2\nENTITIES');
 
-  // geometry layer
-  lines.push('0', 'LAYER');
-  lines.push('2', 'DUSTY-GEOMETRY');
-  lines.push('70', '0');
-  lines.push('62', '7'); // white
-  lines.push('6', 'Continuous');
-
-  // text layer
-  lines.push('0', 'LAYER');
-  lines.push('2', 'DUSTY-TEXT');
-  lines.push('70', '0');
-  lines.push('62', '3'); // green
-  lines.push('6', 'Continuous');
-
-  // info layer
-  lines.push('0', 'LAYER');
-  lines.push('2', 'DUSTY-INFO');
-  lines.push('70', '0');
-  lines.push('62', '1'); // red
-  lines.push('6', 'Continuous');
-
-  lines.push('0', 'ENDTAB');
-  lines.push('0', 'ENDSEC');
-
-  // ── ENTITIES ──
-  lines.push('0', 'SECTION');
-  lines.push('2', 'ENTITIES');
-
-  // header comment block as TEXT entities
-  const headerLines = [
-    `DUSTY ROBOTICS - PDF TO DXF EXTRACTION`,
-    `Source: ${outputName}`,
-    `Extracted: ${dateStr}`,
+  const infoLines = [
+    'DUSTY ROBOTICS - PDF TO DXF EXTRACTION',
+    `Source: ${outputName} | Date: ${dateStr}`,
     `Trade: ${trade} | Type: ${drawingType}`,
-    `Scale Factor: 1/${scaleFactor} | Units: ${units}`,
-    fitPage ? `WARNING: FIT-TO-PAGE - SCALE MAY NOT BE ACCURATE` : `Scale: confirmed at drawing settings`,
-    rotation !== 0 ? `Rotation applied: ${rotation} degrees` : `No rotation applied`,
-    originX !== 0 || originY !== 0 ? `Origin offset: ${originX}, ${originY}` : `Origin: 0,0`,
-    `Lines: ${result.lines} | Arcs: ${result.arcs} | Polylines: ${result.polylines} | Text: ${result.texts}`,
-    `IMPORTANT: Convert to DWG before uploading to Dusty Portal`
+    `Scale: 1/${scaleFactor} | Units: ${units}`,
+    fitPage ? 'WARNING: FIT-TO-PAGE - SCALE MAY NOT BE ACCURATE' : 'Scale: confirmed',
+    `Entities: ${result.lines} lines, ${result.polylines} polylines, ${result.texts} text`,
+    'NOTE: Convert to DWG before uploading to Dusty Portal'
   ];
 
-  let infoY = -2;
-  for (const hl of headerLines) {
-    lines.push('0', 'TEXT');
-    lines.push('8', 'DUSTY-INFO');
-    lines.push('10', '-50');
-    lines.push('20', String(infoY));
-    lines.push('30', '0.0');
-    lines.push('40', '0.5');
-    lines.push('1', hl);
-    infoY -= 1;
+  let iy = -2;
+  for (const txt of infoLines) {
+    out.push(`0\nTEXT\n8\nDUSTY-INFO\n10\n-50\n20\n${iy}\n30\n0\n40\n0.5\n1\n${txt}`);
+    iy -= 1;
   }
 
-  // LINE entities
   for (const l of result._lines) {
     if (!isFinite(l.x1) || !isFinite(l.y1) || !isFinite(l.x2) || !isFinite(l.y2)) continue;
-    lines.push('0', 'LINE');
-    lines.push('8', 'DUSTY-GEOMETRY');
-    lines.push('10', fmt(l.x1));
-    lines.push('20', fmt(l.y1));
-    lines.push('30', '0.0');
-    lines.push('11', fmt(l.x2));
-    lines.push('21', fmt(l.y2));
-    lines.push('31', '0.0');
+    if (Math.abs(l.x1 - l.x2) < 0.0001 && Math.abs(l.y1 - l.y2) < 0.0001) continue;
+    out.push(`0\nLINE\n8\nDUSTY-GEOMETRY\n10\n${fmt(l.x1)}\n20\n${fmt(l.y1)}\n30\n0\n11\n${fmt(l.x2)}\n21\n${fmt(l.y2)}\n31\n0`);
   }
 
-  // RECTANGLE → 4 LINEs
-  for (const r of result._rectangles) {
-    if (!isFinite(r.x) || !isFinite(r.y)) continue;
-    const x1 = r.x, y1 = r.y, x2 = r.x + r.w, y2 = r.y + r.h;
-    const corners = [[x1,y1,x2,y1],[x2,y1,x2,y2],[x2,y2,x1,y2],[x1,y2,x1,y1]];
-    for (const [ax,ay,bx,by] of corners) {
-      lines.push('0', 'LINE');
-      lines.push('8', 'DUSTY-GEOMETRY');
-      lines.push('10', fmt(ax)); lines.push('20', fmt(ay)); lines.push('30', '0.0');
-      lines.push('11', fmt(bx)); lines.push('21', fmt(by)); lines.push('31', '0.0');
-    }
-  }
-
-  // POLYLINE → LWPOLYLINE
   for (const poly of result._polylines) {
-    if (poly.length < 2) continue;
-    const validPts = poly.filter(p => isFinite(p.x) && isFinite(p.y));
-    if (validPts.length < 2) continue;
-    lines.push('0', 'LWPOLYLINE');
-    lines.push('8', 'DUSTY-GEOMETRY');
-    lines.push('90', String(validPts.length));
-    lines.push('70', '0'); // open
-    for (const pt of validPts) {
-      lines.push('10', fmt(pt.x));
-      lines.push('20', fmt(pt.y));
-    }
+    const valid = poly.filter(p => isFinite(p.x) && isFinite(p.y));
+    if (valid.length < 2) continue;
+    let pline = `0\nLWPOLYLINE\n8\nDUSTY-GEOMETRY\n90\n${valid.length}\n70\n0`;
+    for (const pt of valid) pline += `\n10\n${fmt(pt.x)}\n20\n${fmt(pt.y)}`;
+    out.push(pline);
   }
 
-  // TEXT entities
   for (const t of result._texts) {
-    if (!isFinite(t.x) || !isFinite(t.y)) continue;
-    if (!t.text || !t.text.trim()) continue;
-    lines.push('0', 'TEXT');
-    lines.push('8', 'DUSTY-TEXT');
-    lines.push('10', fmt(t.x));
-    lines.push('20', fmt(t.y));
-    lines.push('30', '0.0');
-    lines.push('40', fmt(Math.max(t.height, 0.05)));
-    lines.push('1', t.text.replace(/[^\x20-\x7E]/g, '?')); // ASCII only
+    if (!isFinite(t.x) || !isFinite(t.y) || !t.text.trim()) continue;
+    const safe = t.text.replace(/[^\x20-\x7E]/g, '?').replace(/\n/g, ' ');
+    out.push(`0\nTEXT\n8\nDUSTY-TEXT\n10\n${fmt(t.x)}\n20\n${fmt(t.y)}\n30\n0\n40\n${fmt(Math.max(t.height, 0.05))}\n1\n${safe}`);
   }
 
-  lines.push('0', 'ENDSEC');
-  lines.push('0', 'EOF');
+  out.push('0\nENDSEC');
+  out.push('0\nEOF');
 
-  return lines.join('\n');
+  return out.join('\n');
 }
 
-// format a number for DXF — 6 decimal places, trim trailing zeros
 function fmt(n) {
-  if (!isFinite(n)) return '0.0';
-  return parseFloat(n.toFixed(6)).toString();
+  if (!isFinite(n)) return '0';
+  return parseFloat(n.toFixed(4)).toString();
 }
