@@ -73,20 +73,46 @@ function extractGeometry(ops, viewport, options) {
   const opsSeen = {};
 
   for (let i = 0; i < fnArray.length; i++) {
-    const fn = fnArray[i];
-    const args = argsArray[i];
+  const fn = fnArray[i];
+  const args = argsArray[i];
 
-    opsSeen[fn] = (opsSeen[fn] || 0) + 1;
+  opsSeen[fn] = (opsSeen[fn] || 0) + 1;
 
-    switch (fn) {
-
-      case PDF_OPS.moveTo: {
-        if (!args || args.length < 2) break;
-        cx = args[0]; cy = args[1];
-        currentPath = [{ x: transformX(cx), y: transformY(cy) }];
-        isDrawing = true;
-        break;
-      }
+  if (fn === 10 && args && args.length >= 2) {
+    cx = args[0]; cy = args[1];
+    currentPath = [{ x: transformX(cx), y: transformY(cy) }];
+    isDrawing = true;
+  }
+  else if (fn === 11 && args && args.length >= 2 && isDrawing) {
+    const px = transformX(args[0]);
+    const py = transformY(args[1]);
+    const prev = currentPath[currentPath.length - 1];
+    if (prev) lines.push({ x1: prev.x, y1: prev.y, x2: px, y2: py });
+    currentPath.push({ x: px, y: py });
+    cx = args[0]; cy = args[1];
+  }
+  else if (fn === 91 && args && args.length >= 4) {
+    const rx = args[0], ry = args[1], rw = args[2], rh = args[3];
+    const x1 = transformX(rx), y1 = transformY(ry);
+    const x2 = transformX(rx + rw), y2 = transformY(ry + rh);
+    lines.push({ x1, y1, x2, y2: y1 });
+    lines.push({ x1: x2, y1, x2, y2 });
+    lines.push({ x1: x2, y1: y2, x2: x1, y2 });
+    lines.push({ x1, y1: y2, x2: x1, y2: y1 });
+    isDrawing = false; currentPath = [];
+  }
+  else if (fn === 9 && isDrawing && currentPath.length > 1) {
+    const last = currentPath[currentPath.length - 1];
+    const first = currentPath[0];
+    lines.push({ x1: last.x, y1: last.y, x2: first.x, y2: first.y });
+    isDrawing = false; currentPath = [];
+  }
+  else if ((fn === 20 || fn === 21 || fn === 22 || fn === 28) && currentPath.length > 2) {
+    polylines.push([...currentPath]);
+    currentPath = [];
+    isDrawing = false;
+  }
+}
 
       case PDF_OPS.lineTo: {
         if (!args || args.length < 2 || !isDrawing) break;
