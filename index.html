@@ -1,1 +1,1421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dusty PDF → DXF Extractor</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap');
 
+  :root {
+    --bg: #0b0c0f;
+    --bg2: #13151a;
+    --bg3: #1c1f27;
+    --orange: #e85d2a;
+    --orange-dim: rgba(232, 93, 42, 0.15);
+    --orange-glow: rgba(232, 93, 42, 0.4);
+    --text: #e8e9ec;
+    --text-dim: #7a7f8e;
+    --text-muted: #454a57;
+    --border: rgba(255,255,255,0.07);
+    --border-active: rgba(232, 93, 42, 0.4);
+    --success: #2aad6e;
+    --warning: #d4a017;
+    --error: #e8422a;
+    --radius: 6px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── PASSWORD GATE ── */
+  #gate {
+    position: fixed; inset: 0;
+    background: var(--bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  #gate.hidden { display: none; }
+
+  .gate-inner {
+    width: 380px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 32px;
+  }
+
+  .gate-logo {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .gate-logo .wordmark {
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .gate-logo .product {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    color: var(--orange);
+    text-transform: uppercase;
+  }
+
+  .gate-robot {
+    width: 52px;
+    height: 52px;
+  }
+
+  .gate-form {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .gate-label {
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    font-family: 'Space Mono', monospace;
+  }
+
+  .gate-input-wrap {
+    position: relative;
+  }
+
+  .gate-input {
+    width: 100%;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    color: var(--text);
+    font-family: 'Space Mono', monospace;
+    font-size: 14px;
+    letter-spacing: 0.1em;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .gate-input:focus {
+    border-color: var(--border-active);
+  }
+
+  .gate-btn {
+    background: var(--orange);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    padding: 14px;
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+    width: 100%;
+  }
+
+  .gate-btn:hover { opacity: 0.9; }
+  .gate-btn:active { transform: scale(0.99); }
+
+  .gate-error {
+    font-size: 12px;
+    color: var(--error);
+    font-family: 'Space Mono', monospace;
+    text-align: center;
+    min-height: 16px;
+  }
+
+  /* ── MAIN APP ── */
+  #app {
+    display: none;
+    min-height: 100vh;
+    flex-direction: column;
+  }
+
+  #app.visible { display: flex; }
+
+  /* header */
+  .header {
+    border-bottom: 1px solid var(--border);
+    padding: 18px 40px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    background: rgba(11,12,15,0.95);
+    backdrop-filter: blur(12px);
+    z-index: 100;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .header-logo {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .header-divider {
+    width: 1px;
+    height: 16px;
+    background: var(--border);
+  }
+
+  .header-product {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--orange);
+  }
+
+  .header-badge {
+    background: var(--orange-dim);
+    border: 1px solid var(--orange-glow);
+    color: var(--orange);
+    font-size: 9px;
+    font-family: 'Space Mono', monospace;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 3px;
+  }
+
+  /* main layout */
+  .main {
+    flex: 1;
+    max-width: 960px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 48px 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+  }
+
+  .page-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.3;
+  }
+
+  .page-sub {
+    font-size: 14px;
+    color: var(--text-dim);
+    margin-top: 8px;
+    line-height: 1.6;
+    max-width: 560px;
+  }
+
+  /* cards */
+  .card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 28px 32px;
+  }
+
+  .card-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--orange);
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .card-title::before {
+    content: '';
+    display: inline-block;
+    width: 3px;
+    height: 12px;
+    background: var(--orange);
+    border-radius: 2px;
+  }
+
+  /* drop zone */
+  .dropzone {
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    padding: 48px 32px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+  }
+
+  .dropzone:hover, .dropzone.dragover {
+    border-color: var(--orange);
+    background: var(--orange-dim);
+  }
+
+  .dropzone-icon {
+    font-size: 36px;
+    margin-bottom: 16px;
+    opacity: 0.5;
+  }
+
+  .dropzone-title {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: 6px;
+  }
+
+  .dropzone-sub {
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .dropzone-sub span {
+    color: var(--orange);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  #file-input { display: none; }
+
+  /* file loaded state */
+  .file-loaded {
+    display: none;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 20px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+
+  .file-loaded.visible { display: flex; }
+
+  .file-icon {
+    width: 40px;
+    height: 40px;
+    background: var(--orange-dim);
+    border: 1px solid var(--orange-glow);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+
+  .file-info { flex: 1; }
+
+  .file-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: 3px;
+  }
+
+  .file-meta {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: 'Space Mono', monospace;
+  }
+
+  .file-clear {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 11px;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: 'Space Mono', monospace;
+    transition: all 0.2s;
+  }
+
+  .file-clear:hover { border-color: var(--error); color: var(--error); }
+
+  /* page picker */
+  #page-picker-section { display: none; }
+  #page-picker-section.visible { display: block; }
+
+  .page-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .page-btn {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    padding: 8px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .page-btn:hover { border-color: var(--orange); color: var(--text); }
+  .page-btn.active { background: var(--orange-dim); border-color: var(--orange); color: var(--orange); }
+
+  /* form grid */
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+
+  .form-grid.three { grid-template-columns: 1fr 1fr 1fr; }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .field.full { grid-column: 1 / -1; }
+
+  .field-label {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    font-family: 'Space Mono', monospace;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .field-label .optional {
+    font-size: 9px;
+    color: var(--text-muted);
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .field-label .required {
+    color: var(--orange);
+  }
+
+  select, input[type="text"], input[type="number"] {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+    width: 100%;
+    appearance: none;
+    -webkit-appearance: none;
+  }
+
+  select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%237a7f8e' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 36px;
+  }
+
+  select:focus, input:focus { border-color: var(--border-active); }
+
+  select option { background: var(--bg3); }
+
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .toggle {
+    position: relative;
+    width: 40px;
+    height: 22px;
+    flex-shrink: 0;
+  }
+
+  .toggle input { opacity: 0; width: 0; height: 0; }
+
+  .toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    cursor: pointer;
+    transition: 0.2s;
+  }
+
+  .toggle-slider::before {
+    content: '';
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    left: 3px;
+    top: 3px;
+    background: var(--text-dim);
+    border-radius: 50%;
+    transition: 0.2s;
+  }
+
+  .toggle input:checked + .toggle-slider { background: var(--orange-dim); border-color: var(--orange); }
+  .toggle input:checked + .toggle-slider::before { transform: translateX(18px); background: var(--orange); }
+
+  .toggle-label {
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  .toggle-sub {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 2px;
+  }
+
+  /* warning box */
+  .warn-box {
+    display: none;
+    background: rgba(212, 160, 23, 0.08);
+    border: 1px solid rgba(212, 160, 23, 0.3);
+    border-radius: 6px;
+    padding: 12px 16px;
+    font-size: 12px;
+    color: var(--warning);
+    font-family: 'Space Mono', monospace;
+    line-height: 1.6;
+    gap: 10px;
+    align-items: flex-start;
+  }
+
+  .warn-box.visible { display: flex; }
+  .warn-box .warn-icon { flex-shrink: 0; margin-top: 1px; }
+
+  /* divider */
+  .divider {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 0;
+  }
+
+  /* extract button */
+  .extract-btn {
+    background: var(--orange);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    padding: 16px 32px;
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    align-self: flex-start;
+  }
+
+  .extract-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+  .extract-btn:active { transform: translateY(0); }
+  .extract-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+  /* progress */
+  #progress-section { display: none; }
+  #progress-section.visible { display: block; }
+
+  .progress-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .progress-step {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 16px;
+    border-radius: 6px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    transition: all 0.3s;
+  }
+
+  .progress-step.active {
+    border-color: var(--orange-glow);
+    background: var(--orange-dim);
+  }
+
+  .progress-step.done {
+    border-color: rgba(42, 173, 110, 0.3);
+    background: rgba(42, 173, 110, 0.05);
+  }
+
+  .step-dot {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--bg);
+    border: 2px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    flex-shrink: 0;
+    transition: all 0.3s;
+  }
+
+  .progress-step.active .step-dot {
+    border-color: var(--orange);
+    background: var(--orange-dim);
+    animation: pulse 1.2s infinite;
+  }
+
+  .progress-step.done .step-dot {
+    border-color: var(--success);
+    background: rgba(42, 173, 110, 0.15);
+    color: var(--success);
+  }
+
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 var(--orange-glow); }
+    50% { box-shadow: 0 0 0 6px transparent; }
+  }
+
+  .step-text {
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .progress-step.active .step-text { color: var(--text); }
+  .progress-step.done .step-text { color: var(--success); }
+
+  /* results */
+  #result-section { display: none; }
+  #result-section.visible { display: block; }
+
+  .result-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+    margin-bottom: 24px;
+  }
+
+  .result-status {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .result-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+  }
+
+  .result-icon.success { background: rgba(42, 173, 110, 0.12); border: 1px solid rgba(42, 173, 110, 0.3); }
+  .result-icon.warn { background: rgba(212, 160, 23, 0.12); border: 1px solid rgba(212, 160, 23, 0.3); }
+  .result-icon.error { background: rgba(232, 66, 42, 0.12); border: 1px solid rgba(232, 66, 42, 0.3); }
+
+  .result-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+
+  .result-sub {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .result-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+
+  .stat-box {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 16px;
+  }
+
+  .stat-val {
+    font-family: 'Space Mono', monospace;
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--orange);
+    margin-bottom: 4px;
+  }
+
+  .stat-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .result-warnings {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+
+  .result-warn-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 14px;
+    background: rgba(212, 160, 23, 0.06);
+    border: 1px solid rgba(212, 160, 23, 0.2);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--warning);
+    font-family: 'Space Mono', monospace;
+    line-height: 1.5;
+  }
+
+  .result-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .btn-primary {
+    background: var(--orange);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    padding: 12px 24px;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn-primary:hover { opacity: 0.9; }
+
+  .btn-secondary {
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 24px;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .btn-secondary:hover { border-color: var(--text-dim); color: var(--text); }
+
+  /* error state */
+  .error-box {
+    display: none;
+    background: rgba(232, 66, 42, 0.08);
+    border: 1px solid rgba(232, 66, 42, 0.3);
+    border-radius: 6px;
+    padding: 16px 20px;
+    font-size: 13px;
+    color: var(--error);
+    font-family: 'Space Mono', monospace;
+    line-height: 1.6;
+  }
+
+  .error-box.visible { display: block; }
+
+  /* footer */
+  .footer {
+    border-top: 1px solid var(--border);
+    padding: 16px 40px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .footer-left {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--text-muted);
+    letter-spacing: 0.1em;
+  }
+
+  .footer-right {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  /* responsive */
+  @media (max-width: 640px) {
+    .main { padding: 24px 20px; }
+    .form-grid { grid-template-columns: 1fr; }
+    .form-grid.three { grid-template-columns: 1fr 1fr; }
+    .result-stats { grid-template-columns: repeat(2, 1fr); }
+    .header { padding: 14px 20px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- PASSWORD GATE -->
+<div id="gate">
+  <div class="gate-inner">
+    <div class="gate-logo">
+      <svg class="gate-robot" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="8" y="16" width="36" height="26" rx="4" fill="#1c1f27" stroke="#e85d2a" stroke-width="1.5"/>
+        <rect x="18" y="24" width="6" height="6" rx="1.5" fill="#e85d2a"/>
+        <rect x="28" y="24" width="6" height="6" rx="1.5" fill="#e85d2a"/>
+        <rect x="20" y="34" width="12" height="3" rx="1.5" fill="#454a57"/>
+        <rect x="22" y="8" width="8" height="8" rx="2" fill="#1c1f27" stroke="#454a57" stroke-width="1.5"/>
+        <rect x="25" y="12" width="2" height="4" fill="#454a57"/>
+        <rect x="2" y="26" width="6" height="10" rx="3" fill="#1c1f27" stroke="#454a57" stroke-width="1.5"/>
+        <rect x="44" y="26" width="6" height="10" rx="3" fill="#1c1f27" stroke="#454a57" stroke-width="1.5"/>
+      </svg>
+      <div class="wordmark">Dusty Robotics</div>
+      <div class="product">PDF → DXF Extractor · Internal</div>
+    </div>
+    <div class="gate-form">
+      <div class="gate-label">Access Code</div>
+      <div class="gate-input-wrap">
+        <input type="password" class="gate-input" id="gate-pw" placeholder="Enter password" autocomplete="off" />
+      </div>
+      <button class="gate-btn" onclick="checkPassword()">Unlock Tool →</button>
+      <div class="gate-error" id="gate-error"></div>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="app">
+  <header class="header">
+    <div class="header-left">
+      <span class="header-logo">Dusty Robotics</span>
+      <div class="header-divider"></div>
+      <span class="header-product">PDF → DXF Extractor</span>
+    </div>
+    <div class="header-badge">Internal PoC</div>
+  </header>
+
+  <main class="main">
+    <div>
+      <div class="page-title">PDF → DXF Geometry Extraction</div>
+      <div class="page-sub">Upload a vector-based construction PDF to extract geometry into a DXF file. Works best on PDFs exported directly from AutoCAD, Revit, or Bluebeam. Scanned drawings will not convert.</div>
+    </div>
+
+    <!-- STEP 1: Upload -->
+    <div class="card">
+      <div class="card-title">Step 1 — Upload PDF</div>
+      <div id="dropzone" class="dropzone" onclick="document.getElementById('file-input').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event)">
+        <div class="dropzone-icon">📄</div>
+        <div class="dropzone-title">Drop your construction PDF here</div>
+        <div class="dropzone-sub">or <span>browse to select a file</span></div>
+      </div>
+      <input type="file" id="file-input" accept=".pdf" onchange="handleFileSelect(event)" />
+      <div class="file-loaded" id="file-loaded">
+        <div class="file-icon">📐</div>
+        <div class="file-info">
+          <div class="file-name" id="file-name-display"></div>
+          <div class="file-meta" id="file-meta-display"></div>
+        </div>
+        <button class="file-clear" onclick="clearFile()">✕ Clear</button>
+      </div>
+    </div>
+
+    <!-- STEP 2: Page Picker -->
+    <div class="card" id="page-picker-section">
+      <div class="card-title">Step 2 — Select Page</div>
+      <div class="page-grid" id="page-grid"></div>
+    </div>
+
+    <!-- STEP 3: Drawing Info -->
+    <div class="card" id="drawing-info-section" style="display:none">
+      <div class="card-title">Step 3 — Drawing Information</div>
+
+      <div class="form-grid" style="margin-bottom: 20px;">
+        <div class="field">
+          <div class="field-label">Drawing Type <span class="required">*</span></div>
+          <select id="drawing-type" onchange="checkDrawingType()">
+            <option value="">Select type...</option>
+            <option value="floor">Floor Plan</option>
+            <option value="site">Site Plan</option>
+            <option value="foundation">Foundation / Framing Plan</option>
+            <option value="roof">Roof Framing Plan</option>
+            <option value="detail">Detail Sheet</option>
+            <option value="elevation">Elevation</option>
+            <option value="section">Section</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="field">
+          <div class="field-label">Trade / Discipline <span class="optional">(optional)</span></div>
+          <select id="trade">
+            <option value="General">General / Architectural</option>
+            <option value="Structural">Structural</option>
+            <option value="MEP">MEP</option>
+            <option value="Framing">Framing</option>
+            <option value="Civil">Civil / Site</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="drawing-type-warn" class="warn-box" style="margin-bottom: 20px;">
+        <span class="warn-icon">⚠️</span>
+        <span id="drawing-type-warn-text"></span>
+      </div>
+
+      <div class="divider" style="margin-bottom: 20px;"></div>
+      <div class="card-title" style="margin-bottom: 20px;">Step 4 — Scale & Sheet Settings</div>
+
+      <div class="form-grid three" style="margin-bottom: 16px;">
+        <div class="field">
+          <div class="field-label">Drawing Scale <span class="required">*</span></div>
+          <select id="scale-preset" onchange="handleScalePreset()">
+            <option value="">Select scale...</option>
+            <option value="96">1/8" = 1'-0" (most common)</option>
+            <option value="48">1/4" = 1'-0"</option>
+            <option value="24">1/2" = 1'-0"</option>
+            <option value="16">3/4" = 1'-0"</option>
+            <option value="12">1" = 1'-0"</option>
+            <option value="240">1" = 20'-0" (site plans)</option>
+            <option value="custom">Custom...</option>
+          </select>
+        </div>
+        <div class="field" id="custom-scale-field" style="display:none;">
+          <div class="field-label">Custom Scale Factor</div>
+          <input type="number" id="custom-scale" placeholder="e.g. 96" min="1" max="9999" />
+        </div>
+        <div class="field">
+          <div class="field-label">Sheet Size <span class="required">*</span></div>
+          <select id="sheet-size">
+            <option value="36x24">36" × 24" (ARCH D)</option>
+            <option value="42x30">42" × 30" (ARCH E)</option>
+            <option value="24x18">24" × 18" (ARCH C)</option>
+            <option value="30x42">30" × 42" (portrait)</option>
+            <option value="11x17">11" × 17" (ARCH B)</option>
+          </select>
+        </div>
+        <div class="field">
+          <div class="field-label">Units <span class="required">*</span></div>
+          <select id="units">
+            <option value="imperial">Imperial (feet/inches)</option>
+            <option value="metric">Metric (mm)</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="fitpage-warn" class="warn-box" style="margin-bottom: 20px;">
+        <span class="warn-icon">⚠️</span>
+        <span>Fit-to-page printing detected or selected — the DXF output may not be true to scale. VDC will need to verify dimensions against a known reference before using this file.</span>
+      </div>
+
+      <div class="form-grid" style="margin-bottom: 20px;">
+        <div class="field">
+          <div class="field-label">Output File Name <span class="optional">(optional)</span></div>
+          <input type="text" id="output-name" placeholder="e.g. Symbotic_W3_Floor1" />
+        </div>
+        <div class="field">
+          <div class="field-label">Rotation (degrees) <span class="optional">(optional)</span></div>
+          <input type="number" id="rotation" placeholder="e.g. 0 or 45" min="-360" max="360" value="0" />
+        </div>
+      </div>
+
+      <div class="form-grid" style="margin-bottom: 20px;">
+        <div class="field">
+          <div class="field-label">Origin X Coordinate <span class="optional">(optional)</span></div>
+          <input type="number" id="origin-x" placeholder="Known X coordinate (ft)" step="any" />
+        </div>
+        <div class="field">
+          <div class="field-label">Origin Y Coordinate <span class="optional">(optional)</span></div>
+          <input type="number" id="origin-y" placeholder="Known Y coordinate (ft)" step="any" />
+        </div>
+      </div>
+
+      <div class="divider" style="margin-bottom: 20px;"></div>
+
+      <div class="form-grid">
+        <div class="field">
+          <div class="toggle-row">
+            <label class="toggle">
+              <input type="checkbox" id="toggle-fitpage" onchange="handleFitPage()" />
+              <span class="toggle-slider"></span>
+            </label>
+            <div>
+              <div class="toggle-label">Printed "fit to page"</div>
+              <div class="toggle-sub">PDF was not printed at 100% scale</div>
+            </div>
+          </div>
+        </div>
+        <div class="field">
+          <div class="toggle-row">
+            <label class="toggle">
+              <input type="checkbox" id="toggle-annotations" checked />
+              <span class="toggle-slider"></span>
+            </label>
+            <div>
+              <div class="toggle-label">Include text annotations</div>
+              <div class="toggle-sub">Room names, dimensions, labels</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- EXTRACT BUTTON -->
+    <div id="extract-section" style="display:none; flex-direction:column; gap:12px;">
+      <button class="extract-btn" id="extract-btn" onclick="runExtraction()">
+        <span>⚡</span>
+        <span>Extract to DXF</span>
+      </button>
+      <div class="error-box" id="validation-error"></div>
+    </div>
+
+    <!-- PROGRESS -->
+    <div class="card" id="progress-section">
+      <div class="card-title">Extracting Geometry</div>
+      <div class="progress-steps" id="progress-steps">
+        <div class="progress-step" id="step-0">
+          <div class="step-dot" id="dot-0">1</div>
+          <div class="step-text">Reading PDF structure...</div>
+        </div>
+        <div class="progress-step" id="step-1">
+          <div class="step-dot" id="dot-1">2</div>
+          <div class="step-text">Detecting PDF type (vector vs raster)...</div>
+        </div>
+        <div class="progress-step" id="step-2">
+          <div class="step-dot" id="dot-2">3</div>
+          <div class="step-text">Extracting vector geometry...</div>
+        </div>
+        <div class="progress-step" id="step-3">
+          <div class="step-dot" id="dot-3">4</div>
+          <div class="step-text">Applying scale and coordinate transform...</div>
+        </div>
+        <div class="progress-step" id="step-4">
+          <div class="step-dot" id="dot-4">5</div>
+          <div class="step-text">Writing DXF file...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RESULT -->
+    <div class="card" id="result-section">
+      <div class="result-header">
+        <div class="result-status">
+          <div class="result-icon" id="result-icon">✅</div>
+          <div>
+            <div class="result-title" id="result-title">Extraction Complete</div>
+            <div class="result-sub" id="result-sub"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="result-stats" id="result-stats"></div>
+      <div class="result-warnings" id="result-warnings"></div>
+
+      <div class="result-actions">
+        <button class="btn-primary" id="download-btn" onclick="downloadDXF()">
+          <span>↓</span>
+          <span>Download DXF</span>
+        </button>
+        <button class="btn-secondary" onclick="resetTool()">Extract Another File</button>
+      </div>
+    </div>
+
+  </main>
+
+  <footer class="footer">
+    <div class="footer-left">Dusty Robotics · Internal Tools · PoC Build</div>
+    <div class="footer-right">DXF output requires DWG conversion before uploading to Dusty Portal</div>
+  </footer>
+</div>
+
+<script src="extractor.js"></script>
+<script>
+  // PDF.js worker
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  // ── AUTH ──
+  function checkPassword() {
+    const pw = document.getElementById('gate-pw').value;
+    const err = document.getElementById('gate-error');
+    if (pw === 'dusty2026') {
+      sessionStorage.setItem('dusty_auth', '1');
+      document.getElementById('gate').classList.add('hidden');
+      document.getElementById('app').classList.add('visible');
+      err.textContent = '';
+    } else {
+      err.textContent = 'Incorrect password. Try again.';
+      document.getElementById('gate-pw').value = '';
+      document.getElementById('gate-pw').focus();
+    }
+  }
+
+  document.getElementById('gate-pw').addEventListener('keydown', e => {
+    if (e.key === 'Enter') checkPassword();
+  });
+
+  if (sessionStorage.getItem('dusty_auth') === '1') {
+    document.getElementById('gate').classList.add('hidden');
+    document.getElementById('app').classList.add('visible');
+  }
+
+  // ── FILE HANDLING ──
+  let pdfFile = null;
+  let pdfDoc = null;
+  let selectedPage = 1;
+
+  function handleDragOver(e) {
+    e.preventDefault();
+    document.getElementById('dropzone').classList.add('dragover');
+  }
+
+  function handleDragLeave(e) {
+    document.getElementById('dropzone').classList.remove('dragover');
+  }
+
+  function handleDrop(e) {
+    e.preventDefault();
+    document.getElementById('dropzone').classList.remove('dragover');
+    const file = e.dataTransfer.files[0];
+    if (file && file.type === 'application/pdf') loadFile(file);
+  }
+
+  function handleFileSelect(e) {
+    const file = e.target.files[0];
+    if (file) loadFile(file);
+  }
+
+  async function loadFile(file) {
+    pdfFile = file;
+    const bytes = await file.arrayBuffer();
+    pdfDoc = await pdfjsLib.getDocument({ data: bytes }).promise;
+
+    // show file info
+    document.getElementById('dropzone').style.display = 'none';
+    const loaded = document.getElementById('file-loaded');
+    loaded.classList.add('visible');
+    document.getElementById('file-name-display').textContent = file.name;
+    document.getElementById('file-meta-display').textContent =
+      `${pdfDoc.numPages} page${pdfDoc.numPages !== 1 ? 's' : ''} · ${(file.size / 1024).toFixed(0)} KB`;
+
+    // default output name from filename
+    const base = file.name.replace(/\.pdf$/i, '');
+    document.getElementById('output-name').placeholder = base;
+
+    // build page picker
+    buildPagePicker(pdfDoc.numPages);
+    document.getElementById('page-picker-section').classList.add('visible');
+    document.getElementById('drawing-info-section').style.display = 'block';
+    document.getElementById('extract-section').style.display = 'flex';
+  }
+
+  function buildPagePicker(count) {
+    const grid = document.getElementById('page-grid');
+    grid.innerHTML = '';
+    for (let i = 1; i <= count; i++) {
+      const btn = document.createElement('button');
+      btn.className = 'page-btn' + (i === 1 ? ' active' : '');
+      btn.textContent = `Page ${i}`;
+      btn.onclick = () => selectPage(i);
+      grid.appendChild(btn);
+    }
+    selectedPage = 1;
+  }
+
+  function selectPage(n) {
+    selectedPage = n;
+    document.querySelectorAll('.page-btn').forEach((b, i) => {
+      b.classList.toggle('active', i + 1 === n);
+    });
+  }
+
+  function clearFile() {
+    pdfFile = null;
+    pdfDoc = null;
+    document.getElementById('file-input').value = '';
+    document.getElementById('dropzone').style.display = '';
+    document.getElementById('file-loaded').classList.remove('visible');
+    document.getElementById('page-picker-section').classList.remove('visible');
+    document.getElementById('drawing-info-section').style.display = 'none';
+    document.getElementById('extract-section').style.display = 'none';
+    document.getElementById('progress-section').classList.remove('visible');
+    document.getElementById('result-section').classList.remove('visible');
+    document.getElementById('validation-error').classList.remove('visible');
+  }
+
+  // ── FORM LOGIC ──
+  function handleScalePreset() {
+    const val = document.getElementById('scale-preset').value;
+    document.getElementById('custom-scale-field').style.display = val === 'custom' ? 'flex' : 'none';
+  }
+
+  function handleFitPage() {
+    const on = document.getElementById('toggle-fitpage').checked;
+    const warn = document.getElementById('fitpage-warn');
+    warn.classList.toggle('visible', on);
+  }
+
+  function checkDrawingType() {
+    const val = document.getElementById('drawing-type').value;
+    const warn = document.getElementById('drawing-type-warn');
+    const txt = document.getElementById('drawing-type-warn-text');
+    if (val === 'detail' || val === 'elevation' || val === 'section') {
+      txt.textContent = `${val.charAt(0).toUpperCase() + val.slice(1)} sheets contain 2D geometry but are not floor plan views — the extracted DXF may not be useful for Dusty layout. Consider using a floor plan, foundation plan, or framing plan page instead.`;
+      warn.classList.add('visible');
+    } else if (val === 'other') {
+      txt.textContent = 'Unknown drawing type — extraction will proceed but output usability for Dusty layout is uncertain.';
+      warn.classList.add('visible');
+    } else {
+      warn.classList.remove('visible');
+    }
+  }
+
+  function getScaleFactor() {
+    const preset = document.getElementById('scale-preset').value;
+    if (preset === 'custom') {
+      return parseFloat(document.getElementById('custom-scale').value) || null;
+    }
+    return preset ? parseFloat(preset) : null;
+  }
+
+  function getOutputName() {
+    const name = document.getElementById('output-name').value.trim();
+    const placeholder = document.getElementById('output-name').placeholder;
+    return (name || placeholder || 'dusty-extract').replace(/[^a-zA-Z0-9_\-]/g, '_');
+  }
+
+  // ── EXTRACTION ──
+  async function runExtraction() {
+    const errBox = document.getElementById('validation-error');
+    errBox.classList.remove('visible');
+
+    // validate
+    if (!pdfFile) { showValidationError('Please upload a PDF file first.'); return; }
+    if (!document.getElementById('drawing-type').value) { showValidationError('Please select a drawing type.'); return; }
+    if (!getScaleFactor()) { showValidationError('Please select a drawing scale.'); return; }
+
+    // show progress, hide result
+    document.getElementById('progress-section').classList.add('visible');
+    document.getElementById('result-section').classList.remove('visible');
+    document.getElementById('extract-btn').disabled = true;
+
+    resetSteps();
+
+    try {
+      await setStep(0, 500);  // reading PDF
+
+      const page = await pdfDoc.getPage(selectedPage);
+      await setStep(1, 300);  // detecting type
+
+      // get operators
+      const ops = await page.getOperatorList();
+      const viewport = page.getViewport({ scale: 1 });
+
+      await setStep(2, 600);  // extracting geometry
+
+      const includeText = document.getElementById('toggle-annotations').checked;
+      const textContent = includeText ? await page.getTextContent() : null;
+
+      const scaleFactor = getScaleFactor();
+      const units = document.getElementById('units').value;
+      const rotation = parseFloat(document.getElementById('rotation').value) || 0;
+      const originX = parseFloat(document.getElementById('origin-x').value) || 0;
+      const originY = parseFloat(document.getElementById('origin-y').value) || 0;
+      const trade = document.getElementById('trade').value;
+      const drawingType = document.getElementById('drawing-type').value;
+      const fitPage = document.getElementById('toggle-fitpage').checked;
+
+      await setStep(3, 400);  // applying scale
+
+      const result = extractGeometry(ops, viewport, {
+        scaleFactor,
+        units,
+        rotation,
+        originX,
+        originY,
+        includeText,
+        textContent,
+        fitPage
+      });
+
+      await setStep(4, 500);  // writing DXF
+
+      const dxfString = buildDXF(result, {
+        trade,
+        drawingType,
+        scaleFactor,
+        units,
+        outputName: getOutputName(),
+        fitPage,
+        rotation,
+        originX,
+        originY
+      });
+
+      showResult(result, dxfString, fitPage);
+
+    } catch (err) {
+      console.error(err);
+      showError('Extraction failed: ' + err.message);
+    }
+
+    document.getElementById('extract-btn').disabled = false;
+  }
+
+  function showValidationError(msg) {
+    const box = document.getElementById('validation-error');
+    box.textContent = '⚠ ' + msg;
+    box.classList.add('visible');
+  }
+
+  let dxfOutput = '';
+
+  function showResult(result, dxfString, fitPage) {
+    dxfOutput = dxfString;
+
+    document.getElementById('progress-section').classList.remove('visible');
+    document.getElementById('result-section').classList.add('visible');
+
+    const hasGeometry = result.lines > 0 || result.arcs > 0 || result.polylines > 0;
+
+    // icon & title
+    const icon = document.getElementById('result-icon');
+    const title = document.getElementById('result-title');
+    const sub = document.getElementById('result-sub');
+
+    if (!hasGeometry) {
+      icon.textContent = '❌';
+      icon.className = 'result-icon error';
+      title.textContent = 'No Vector Geometry Found';
+      sub.textContent = 'This PDF may be raster (scanned). No extractable geometry was detected.';
+    } else {
+      icon.textContent = fitPage ? '⚠️' : '✅';
+      icon.className = 'result-icon ' + (fitPage ? 'warn' : 'success');
+      title.textContent = hasGeometry ? 'Extraction Complete' : 'Partial Extraction';
+      sub.textContent = `Page ${selectedPage} processed · ${result.lines + result.arcs + result.polylines + result.rectangles} total entities extracted`;
+    }
+
+    // stats
+    const stats = document.getElementById('result-stats');
+    stats.innerHTML = `
+      <div class="stat-box"><div class="stat-val">${result.lines.toLocaleString()}</div><div class="stat-label">Lines</div></div>
+      <div class="stat-box"><div class="stat-val">${result.arcs.toLocaleString()}</div><div class="stat-label">Arcs</div></div>
+      <div class="stat-box"><div class="stat-val">${result.polylines.toLocaleString()}</div><div class="stat-label">Polylines</div></div>
+      <div class="stat-box"><div class="stat-val">${result.texts.toLocaleString()}</div><div class="stat-label">Text Entities</div></div>
+    `;
+
+    // warnings
+    const warningsEl = document.getElementById('result-warnings');
+    warningsEl.innerHTML = '';
+    const warnings = [];
+
+    if (!hasGeometry) warnings.push('No vector geometry detected — this PDF may be a scanned drawing. Try a PDF exported directly from AutoCAD or Revit.');
+    if (fitPage) warnings.push('File was marked as "fit to page" — scale may not be accurate. VDC should verify dimensions against a known reference measurement before using.');
+    if (result.lines === 0 && result.polylines > 0) warnings.push('No discrete line segments found — geometry is primarily polylines. This is normal for some AutoCAD exports.');
+    if (result.texts > 0) warnings.push('Text extracted as DXF TEXT entities. Text positioning may vary slightly from the original — verify critical dimension annotations in CAD.');
+    warnings.push('DXF output is in paper-space coordinates scaled to real-world units. Open in AutoCAD and run ZOOM EXTENTS to verify geometry before saving as DWG for Dusty Portal.');
+
+    warnings.forEach(w => {
+      warningsEl.innerHTML += `<div class="result-warn-item"><span>⚠</span><span>${w}</span></div>`;
+    });
+  }
+
+  function downloadDXF() {
+    const name = getOutputName();
+    const blob = new Blob([dxfOutput], { type: 'application/dxf' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name + '.dxf';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  function resetTool() {
+    clearFile();
+    dxfOutput = '';
+  }
+
+  function showError(msg) {
+    document.getElementById('progress-section').classList.remove('visible');
+    const errBox = document.getElementById('validation-error');
+    errBox.textContent = '⚠ ' + msg;
+    errBox.classList.add('visible');
+  }
+
+  // ── PROGRESS STEPS ──
+  function resetSteps() {
+    for (let i = 0; i < 5; i++) {
+      document.getElementById(`step-${i}`).className = 'progress-step';
+      const dot = document.getElementById(`dot-${i}`);
+      dot.textContent = i + 1;
+    }
+  }
+
+  async function setStep(idx, delay) {
+    // mark previous as done
+    if (idx > 0) {
+      document.getElementById(`step-${idx-1}`).className = 'progress-step done';
+      document.getElementById(`dot-${idx-1}`).textContent = '✓';
+    }
+    // mark current as active
+    document.getElementById(`step-${idx}`).className = 'progress-step active';
+    await sleep(delay);
+  }
+
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+</script>
+</body>
+</html>
