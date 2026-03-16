@@ -69,7 +69,6 @@ function extractGeometry(ops, viewport, options) {
   let cx = 0, cy = 0;
   let currentPath = [];
   let isDrawing = false;
-  let inText = false;
 
   const opsSeen = {};
 
@@ -78,10 +77,6 @@ function extractGeometry(ops, viewport, options) {
     const args = argsArray[i];
 
     opsSeen[fn] = (opsSeen[fn] || 0) + 1;
-
-    if (fn === PDF_OPS.beginText) { inText = true; continue; }
-    if (fn === PDF_OPS.endText) { inText = false; continue; }
-    if (inText) continue;
 
     switch (fn) {
 
